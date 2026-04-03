@@ -40,27 +40,45 @@ State is written to disk at task boundaries. If a session is interrupted, `/z:bu
 
 ## Skills
 
-### `/z:create` &mdash; New project scaffold
+### Entry points &mdash; run these directly
+
+### `/z:create` &mdash; New project scaffold `user-invoked`
 
 Walks through project creation from idea to runnable codebase. Researches current best practices via web search (not stale training data), presents tech stack options with concrete tradeoffs, scaffolds using framework CLIs, and bootstraps quality infrastructure. Decisions are made one at a time, not dumped as a wall of options.
 
-### `/z:setup` &mdash; Project detection
+### `/z:setup` &mdash; Project detection `user-invoked`
 
-Auto-detects runtime, framework, app type, package manager, linter, type checker, test runner, and formatter. Writes `.zstack/project.json` so all other skills know how to lint, test, and build the project. Suggests capturing a baseline afterward.
+Auto-detects runtime, framework, app type, package manager, linter, type checker, test runner, and formatter. Writes `.zstack/project.json` so all other skills know how to lint, test, and build the project.
 
-### `/z:build` &mdash; Pipeline router
+### `/z:build` &mdash; Pipeline router `user-invoked`
 
 Entry point for all work. Reads project configuration, classifies task scope into Quick/Standard/Full, handles checkpoint resume, and orchestrates the selected pipeline. Monitors scope during execution and suggests tier upgrades if the task outgrows its classification.
 
-### `/z:design` &mdash; Specification authoring (Full tier)
+### `/z:debug` &mdash; Root cause debugging `user-invoked`
+
+Six-phase investigation: reproduce, pattern analysis, hypothesis testing, scope lock, fix, and verification. The iron law is that no fix happens without root cause investigation first. A 3-strike rule escalates to the user if three hypotheses fail (likely an architectural issue). Writes a regression test and produces a structured debug report.
+
+### `/z:review` &mdash; Code review `user-invoked`
+
+Diff-based review across 8 categories: SQL safety, trust boundary violations, conditional side effects, blast radius, error handling, performance, accessibility, and app-type-specific checks. Findings are severity-ranked (Critical/High/Medium/Low) with a deterministic verdict: any Critical or 3+ High findings fail the review. Offers to auto-fix Critical and High issues.
+
+### `/z:secure` &mdash; Security audit `user-invoked`
+
+14-phase analysis from attack surface census through OWASP Top 10 mapping and STRIDE threat modeling. Phases include secrets archaeology (scanning git history for credential patterns), dependency supply chain audit, CI/CD security review, and code-level analysis for injection, auth, and data exposure. Confidence gating adjusts sensitivity: daily mode surfaces only high-confidence findings, comprehensive mode catches anything plausible. Accepts flags for focused scans (`--deps`, `--secrets`, `--owasp`, `--diff`).
+
+---
+
+### Pipeline phases &mdash; executed automatically by `/z:build`
+
+### `/z:design` &mdash; Specification authoring `automatic` `Full only`
 
 Produces a formal spec through Socratic dialogue. Asks 3-6 clarifying questions (one at a time), presents 2-3 architectural approaches with tradeoffs, then writes a sectioned design document covering architecture, data flow, error handling, and testing strategy. App-type-specific sections are included (component trees for web apps, endpoint specs for APIs, command specs for CLIs). Requires explicit user approval before proceeding to planning.
 
-### `/z:plan` &mdash; Task decomposition
+### `/z:plan` &mdash; Task decomposition `automatic` `Standard + Full`
 
 Decomposes a feature into atomic tasks, each 2-5 minutes of work, with a strict no-placeholder policy. Every task includes actual code (not skeletons), exact file paths, exact test commands, and a TDD sequence: write failing test, verify it fails, write implementation, verify it passes, commit. For Full tier, identifies which tasks can execute in parallel. Self-review scans for red flags like TODO, TBD, or "implement the rest similarly."
 
-### `/z:implement` &mdash; TDD execution engine
+### `/z:implement` &mdash; TDD execution engine `automatic` `all tiers`
 
 Executes the plan. Behavior varies by tier:
 
@@ -70,15 +88,11 @@ Executes the plan. Behavior varies by tier:
 
 Each subagent receives a focused prompt with its task, the TDD policy, and the scope lock. After completion, a spec reviewer checks that the implementation matches the plan exactly, and a code quality reviewer checks for clean code, security, and codebase consistency. Two fix attempts are allowed on failure before escalation.
 
-### `/z:review` &mdash; Code review
+### `/z:review` &mdash; Code review `automatic` `Standard + Full`
 
-Diff-based review across 8 categories: SQL safety, trust boundary violations, conditional side effects, blast radius, error handling, performance, accessibility, and app-type-specific checks. Findings are severity-ranked (Critical/High/Medium/Low) with a deterministic verdict: any Critical or 3+ High findings fail the review. Offers to auto-fix Critical and High issues.
+Also available as a standalone entry point (see above). When run inside a pipeline, reviews the full diff produced by `/z:implement`.
 
-### `/z:debug` &mdash; Root cause debugging
-
-Six-phase investigation: reproduce, pattern analysis, hypothesis testing, scope lock, fix, and verification. The iron law is that no fix happens without root cause investigation first. A 3-strike rule escalates to the user if three hypotheses fail (likely an architectural issue). Writes a regression test and produces a structured debug report.
-
-### `/z:qa` &mdash; QA testing
+### `/z:qa` &mdash; QA testing `automatic` `Standard + Full`
 
 Adapts to app type:
 
@@ -89,11 +103,11 @@ Adapts to app type:
 
 Produces a health score (pages tested, issues found/fixed, a11y violations) and a ship readiness verdict. Fixes bugs in a loop based on severity.
 
-### `/z:secure` &mdash; Security audit
+### `/z:secure` &mdash; Security audit `automatic` `Full only`
 
-14-phase analysis from attack surface census through OWASP Top 10 mapping and STRIDE threat modeling. Phases include secrets archaeology (scanning git history for credential patterns), dependency supply chain audit, CI/CD security review, and code-level analysis for injection, auth, and data exposure. Confidence gating adjusts sensitivity: daily mode surfaces only high-confidence findings, comprehensive mode catches anything plausible. Accepts flags for focused scans (`--deps`, `--secrets`, `--owasp`, `--diff`).
+Also available as a standalone entry point (see above). When run inside a pipeline, audits the full changeset before shipping.
 
-### `/z:ship` &mdash; Shipping pipeline
+### `/z:ship` &mdash; Shipping pipeline `automatic` `all tiers`
 
 - **Quick**: Commit only
 - **Standard**: Create PR with structured description, monitor CI, bounded retry on failures (read logs, fix, retry up to 2 times)
@@ -121,13 +135,7 @@ Open Claude Code in your project directory and run:
 
 This detects your runtime, framework, linter, test runner, and package manager, then writes `.zstack/project.json`. All other skills read this file to know how to work with your project.
 
-Next, capture a baseline so quality gates know what failures already existed before you started:
-
-```
-/z:setup baseline
-```
-
-Your project is now ready for zstack.
+A baseline capture runs automatically at the start of every pipeline (regardless of tier), so quality gates always know which failures existed before your work began. No manual step needed.
 
 ### 3. Add a feature
 
