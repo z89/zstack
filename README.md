@@ -101,7 +101,9 @@ Produces a health score (pages tested, issues found/fixed, a11y violations) and 
 
 Warns if review, QA, or security phases were skipped. Cleans up checkpoints and lists worktrees for removal.
 
-## Installation
+## Getting started
+
+### 1. Install zstack
 
 ```bash
 git clone https://github.com/z89/zstack.git
@@ -109,30 +111,63 @@ cd zstack
 ./install.sh
 ```
 
-The installer:
-- Symlinks each skill to `~/.claude/skills/`
-- Merges quality gate hooks into `~/.claude/settings.json` (backs up existing settings first)
-- Makes bin scripts executable and adds them to PATH
-- Warns about npm/yarn worktree bloat (~800MB per worktree) and recommends pnpm
-- Detects conflicts with gstack or other skill systems
+### 2. Set up your project
 
-### Project setup
-
-In any project directory:
-
-```bash
-zstack-setup      # Detect tooling, write .zstack/project.json
-zstack-baseline   # Capture pre-existing failures
-```
-
-## Usage
+Open Claude Code in your project directory and run:
 
 ```
-/z:build          # Auto-detect scope and run the appropriate pipeline
-/z:build --full   # Force Full tier
-/z:create         # Start a new project from scratch
-/z:debug          # Investigate a bug
-/z:secure --deps  # Run dependency audit only
+/z:setup
+```
+
+This detects your runtime, framework, linter, test runner, and package manager, then writes `.zstack/project.json`. All other skills read this file to know how to work with your project.
+
+Next, capture a baseline so quality gates know what failures already existed before you started:
+
+```
+/z:setup baseline
+```
+
+Your project is now ready for zstack.
+
+### 3. Add a feature
+
+The Standard tier is the most common workflow. Here is exactly what happens when you ask zstack to add a feature to an existing project.
+
+Start by telling `/z:build` what you want:
+
+```
+/z:build Add a dark mode toggle to the settings page
+```
+
+zstack classifies this as a multi-file feature and activates the Standard pipeline. Five phases run in sequence:
+
+**Plan** &mdash; `/z:plan` reads your codebase, locks down the architecture (which components change, what the data flow looks like, where the tests go), and writes a plan to `docs/plans/`. Each task in the plan is 2-5 minutes of work with exact file paths, real code (not skeletons), and a TDD sequence: write failing test, verify it fails, write implementation, verify it passes, commit. You review and approve the plan before anything gets built.
+
+**Implement** &mdash; `/z:implement` executes the plan task by task. For Standard tier, each task runs in a subagent that receives the task spec and a scope lock (it can only touch the files listed in its task). After each task, two reviewers check the work: a spec reviewer confirms the implementation matches the plan exactly, and a code quality reviewer checks for clean code, security, and consistency with your codebase. If a task fails, two fix attempts are allowed before escalating to you.
+
+Quality gates run automatically throughout: the linter fires after every file write, and typecheck + colocated tests run before every commit. These are shell hooks, not LLM suggestions, so they always run.
+
+**Review** &mdash; `/z:review` diffs all changes against the base branch and reviews across 8 categories (SQL safety, trust boundaries, error handling, performance, accessibility, and more). Findings are ranked by severity. Critical and High issues get auto-fix offers.
+
+**QA** &mdash; `/z:qa` runs app-type-appropriate tests. For a web app, that means Playwright visual testing, axe-core accessibility checks (WCAG 2.2 AA), and responsive testing at mobile, tablet, and desktop breakpoints. Bugs found are fixed in a loop based on severity. A health score is produced at the end.
+
+**Ship** &mdash; `/z:ship` creates a PR with a structured description, monitors CI, and retries failures (reads logs, fixes the issue, re-pushes, up to two attempts). If you skipped any phases, the PR description notes what was skipped.
+
+The entire pipeline runs from a single command. You approve the plan, review the PR, and merge.
+
+### 4. Other entry points
+
+You do not have to go through `/z:build` for everything. Skills can be invoked directly:
+
+```
+/z:build              # Auto-detect scope and run the appropriate pipeline
+/z:build --full       # Force Full tier (adds design + security phases)
+/z:build --quick      # Force Quick tier (implement + ship only)
+/z:create             # Start a new project from scratch
+/z:debug              # Investigate a bug with structured root cause analysis
+/z:review             # Run a standalone code review on your current diff
+/z:secure --deps      # Run a dependency audit only
+/z:secure --secrets   # Scan git history for leaked credentials
 ```
 
 Any phase can be skipped with flags on `/z:build`:
