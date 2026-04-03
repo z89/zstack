@@ -26,7 +26,7 @@ FRAMEWORK="unknown"
 
 [ -f package.json ] && RUNTIME="node"
 [ -f Gemfile ] && RUNTIME="ruby"
-[ -f requirements.txt ] || [ -f pyproject.toml ] && RUNTIME="python"
+{ [ -f requirements.txt ] || [ -f pyproject.toml ]; } && RUNTIME="python"
 [ -f go.mod ] && RUNTIME="go"
 [ -f Cargo.toml ] && RUNTIME="rust"
 [ -f composer.json ] && RUNTIME="php"
@@ -45,11 +45,16 @@ if [ "$RUNTIME" = "node" ] && [ -f package.json ]; then
   grep -q '"tauri"' package.json 2>/dev/null && FRAMEWORK="tauri"
 fi
 [ "$RUNTIME" = "ruby" ] && grep -q "rails" Gemfile 2>/dev/null && FRAMEWORK="rails"
-[ "$RUNTIME" = "python" ] && {
-  grep -q "django" requirements.txt pyproject.toml 2>/dev/null && FRAMEWORK="django"
-  grep -q "fastapi" requirements.txt pyproject.toml 2>/dev/null && FRAMEWORK="fastapi"
-  grep -q "flask" requirements.txt pyproject.toml 2>/dev/null && FRAMEWORK="flask"
-}
+if [ "$RUNTIME" = "python" ]; then
+  PY_FILES=""
+  [ -f requirements.txt ] && PY_FILES="requirements.txt"
+  [ -f pyproject.toml ] && PY_FILES="$PY_FILES pyproject.toml"
+  if [ -n "$PY_FILES" ]; then
+    grep -q "django" $PY_FILES 2>/dev/null && FRAMEWORK="django"
+    grep -q "fastapi" $PY_FILES 2>/dev/null && FRAMEWORK="fastapi"
+    grep -q "flask" $PY_FILES 2>/dev/null && FRAMEWORK="flask"
+  fi
+fi
 [ "$RUNTIME" = "go" ] && grep -q "gin-gonic" go.mod 2>/dev/null && FRAMEWORK="gin"
 
 # ── Detect app type ──────────────────────────────────────────────────────────
@@ -78,7 +83,7 @@ elif [ -d cmd ] && [ "$RUNTIME" = "go" ]; then
 fi
 
 # Library indicators
-if [ -f package.json ] && grep -q '"main"\|"exports"\|"module"' package.json 2>/dev/null && [ "$APP_TYPE" = "unknown" ]; then
+if [ -f package.json ] && grep -qE '"main"|"exports"|"module"' package.json 2>/dev/null && [ "$APP_TYPE" = "unknown" ]; then
   APP_TYPE="library"
 elif [ -f Cargo.toml ] && grep -q '^\[lib\]' Cargo.toml 2>/dev/null; then
   APP_TYPE="library"
@@ -90,7 +95,7 @@ if [[ "$FRAMEWORK" =~ ^(electron|tauri)$ ]]; then
 fi
 
 # Infrastructure indicators
-if ls *.tf 2>/dev/null | head -1 >/dev/null 2>&1; then
+if compgen -G "*.tf" >/dev/null 2>&1; then
   APP_TYPE="infrastructure"
 elif [ -f pulumi.yaml ] || [ -f Pulumi.yaml ]; then
   APP_TYPE="infrastructure"
@@ -163,7 +168,7 @@ elif [ -f package.json ] && grep -q '"vitest"' package.json 2>/dev/null; then
 elif [ -f package.json ] && grep -q '"jest"' package.json 2>/dev/null; then
   TEST_RUNNER="jest"
   TEST_CMD="npx jest"
-elif [ -f pytest.ini ] || [ -f pyproject.toml ] && grep -q "pytest" pyproject.toml 2>/dev/null; then
+elif [ -f pytest.ini ] || { [ -f pyproject.toml ] && grep -q "pytest" pyproject.toml 2>/dev/null; }; then
   TEST_RUNNER="pytest"
   TEST_CMD="pytest"
 elif [ -f .rspec ]; then
@@ -257,7 +262,7 @@ info "Config written to .zstack/project.json"
 
 # Package manager warning
 if [[ "$PKG_MANAGER" =~ ^(npm|yarn)$ ]]; then
-  warn ""
+  echo ""
   warn "You're using $PKG_MANAGER. zstack creates git worktrees for isolation,"
   warn "and each worktree runs a full dependency install."
   warn "With $PKG_MANAGER, that means ~800MB+ of node_modules per worktree."
@@ -269,7 +274,7 @@ fi
 
 # Add .zstack to .gitignore if not already there
 if [ -f .gitignore ]; then
-  if ! grep -q "^\.zstack" .gitignore 2>/dev/null; then
+  if ! grep -q "^\.zstack/" .gitignore 2>/dev/null; then
     echo ".zstack/" >> .gitignore
     info "Added .zstack/ to .gitignore"
   fi

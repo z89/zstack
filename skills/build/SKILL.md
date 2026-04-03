@@ -87,7 +87,7 @@ On startup, run `zstack-checkpoint verify`. If a valid checkpoint exists, offer 
 Create worktree
 /z:implement  (sequential subagents, flexible test order)
 /z:review
-/z:qa         (if app has UI)
+/z:qa         (adapted to app type)
 /z:ship       (PR + CI monitor)
 ```
 
@@ -100,7 +100,7 @@ Create worktree
 /z:implement  (parallel subagents, up to 5, strict TDD)
 /z:review
 /z:qa         (adapted to app type)
-/z:secure     (14-phase audit)
+/z:secure     (security audit)
 /z:ship       (PR + CI + deploy verify)
 ```
 
@@ -149,4 +149,4 @@ When invoked:
    Skipped: [none | list]
    ```
 6. Ask for confirmation, then begin executing phases in order
-7. Between each phase, save a checkpoint via `zstack-checkpoint save`
+7. Between each phase, save a checkpoint via `zstack-checkpoint write`

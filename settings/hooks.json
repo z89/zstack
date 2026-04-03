@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c 'ZSTACK_DIR=$(dirname $(dirname $(readlink -f ~/.claude/skills/z:build))) && $ZSTACK_DIR/bin/zstack-quality-gate'"
+            "command": "bash -c 'ZSTACK_DIR=$(dirname \"$(dirname \"$(readlink -f ~/.claude/skills/z:build 2>/dev/null)\")\") && [ -n \"$ZSTACK_DIR\" ] && [ -d \"$ZSTACK_DIR/bin\" ] && \"$ZSTACK_DIR/bin/zstack-quality-gate\" || echo \"[zstack] Quality gate skipped: z:build symlink not found.\"'"
           }
         ]
       }

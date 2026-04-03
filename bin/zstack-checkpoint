@@ -16,7 +16,7 @@ CHECKPOINT=".zstack/checkpoint.json"
 case "$ACTION" in
   write)
     PLAN="" TASK=0 TOTAL=0 WORKTREES="" COMPLETED=""
-    while [[ $# -gt 0 ]]; do
+    while [ $# -gt 0 ]; do
       case "$1" in
         --plan) PLAN="$2"; shift 2 ;;
         --task) TASK="$2"; shift 2 ;;
@@ -28,22 +28,47 @@ case "$ACTION" in
     done
 
     PLAN_HASH=""
-    [ -n "$PLAN" ] && [ -f "$PLAN" ] && PLAN_HASH=$(sha256sum "$PLAN" | cut -d' ' -f1)
+    [ -n "$PLAN" ] && [ -f "$PLAN" ] && PLAN_HASH=$(sha256sum "$PLAN" | awk '{print $1}')
+
+    BRANCH=$(git branch --show-current 2>/dev/null || echo unknown)
+    HEAD=$(git rev-parse HEAD 2>/dev/null) || HEAD="unknown"
+    TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+    # Build completed_tasks JSON array safely
+    COMPLETED_JSON="[]"
+    if [ -n "$COMPLETED" ]; then
+      COMPLETED_JSON=$(echo "$COMPLETED" | tr ',' '\n' | jq -R 'tonumber' | jq -s '.')
+    fi
+
+    # Build worktrees JSON array safely
+    WORKTREES_JSON="[]"
+    if [ -n "$WORKTREES" ]; then
+      WORKTREES_JSON=$(echo "$WORKTREES" | tr ',' '\n' | jq -R '.' | jq -s '.')
+    fi
 
     mkdir -p .zstack
-    cat > "$CHECKPOINT" << CP
-{
-  "plan": "$PLAN",
-  "plan_hash": "$PLAN_HASH",
-  "branch": "$(git branch --show-current 2>/dev/null || echo unknown)",
-  "head": "$(git rev-parse HEAD 2>/dev/null || echo unknown)",
-  "current_task": $TASK,
-  "total_tasks": $TOTAL,
-  "completed_tasks": [${COMPLETED}],
-  "worktrees": [${WORKTREES}],
-  "last_updated": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-CP
+    jq -n \
+      --arg plan "$PLAN" \
+      --arg plan_hash "$PLAN_HASH" \
+      --arg branch "$BRANCH" \
+      --arg head "$HEAD" \
+      --argjson task "$TASK" \
+      --argjson total "$TOTAL" \
+      --argjson completed "$COMPLETED_JSON" \
+      --argjson worktrees "$WORKTREES_JSON" \
+      --arg last_updated "$TIMESTAMP" \
+      '{
+        plan: $plan,
+        plan_hash: $plan_hash,
+        branch: $branch,
+        head: $head,
+        current_task: $task,
+        total_tasks: $total,
+        completed_tasks: $completed,
+        worktrees: $worktrees,
+        last_updated: $last_updated
+      }' > "$CHECKPOINT"
+
     echo "Checkpoint saved: task $TASK/$TOTAL"
     ;;
 
@@ -75,7 +100,7 @@ CP
 
     # Check plan file unchanged
     if [ -n "$PLAN" ] && [ -f "$PLAN" ]; then
-      CURRENT_HASH=$(sha256sum "$PLAN" | cut -d' ' -f1)
+      CURRENT_HASH=$(sha256sum "$PLAN" | awk '{print $1}')
       if [ "$CURRENT_HASH" != "$PLAN_HASH" ]; then
         STALE="${STALE:+$STALE, }plan_modified"
       fi
@@ -83,14 +108,12 @@ CP
       STALE="${STALE:+$STALE, }plan_missing"
     fi
 
-    # Check worktrees exist
-    WORKTREES=$(jq -r '.worktrees[]?' "$CHECKPOINT" 2>/dev/null)
-    for wt in $WORKTREES; do
-      wt_clean=$(echo "$wt" | tr -d '"')
-      if [ -n "$wt_clean" ] && [ ! -d "$wt_clean" ]; then
-        STALE="${STALE:+$STALE, }worktree_missing($wt_clean)"
+    # Check worktrees exist (handle paths with spaces)
+    while IFS= read -r wt; do
+      if [ -n "$wt" ] && [ ! -d "$wt" ]; then
+        STALE="${STALE:+$STALE, }worktree_missing($wt)"
       fi
-    done
+    done < <(jq -r '.worktrees[]?' "$CHECKPOINT" 2>/dev/null)
 
     if [ -n "$STALE" ]; then
       echo "STALE: $STALE"
