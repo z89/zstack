@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Pre-commit quality gate: runs typecheck + colocated tests on staged files.
+# Pre-commit quality gate: runs lint + typecheck + colocated tests on staged files.
 # This is a deterministic gate. The agent cannot skip it.
 # Blocks commit if new failures are introduced (baseline-aware).
 
@@ -16,10 +16,13 @@ TYPECHECK_CMD=$(jq -r '.typecheck_cmd // empty' .zstack/project.json)
 TEST_CMD=$(jq -r '.test_cmd // empty' .zstack/project.json)
 TEST_RUNNER=$(jq -r '.test_runner // empty' .zstack/project.json)
 
-# Get staged files
-STAGED=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null || true)
+# Get staged files into an array (handles spaces in filenames)
+STAGED_FILES=()
+while IFS= read -r f; do
+  [ -n "$f" ] && STAGED_FILES+=("$f")
+done < <(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null || true)
 
-if [ -z "$STAGED" ]; then
+if [ ${#STAGED_FILES[@]} -eq 0 ]; then
   exit 0
 fi
 
@@ -29,19 +32,19 @@ ERRORS=0
 
 if [ -n "$LINT_CMD" ]; then
   # Filter to files the linter can handle
-  LINT_FILES=""
-  for f in $STAGED; do
+  LINT_FILES=()
+  for f in "${STAGED_FILES[@]}"; do
     case "$f" in
-      *.ts|*.tsx|*.js|*.jsx|*.mjs|*.cjs) LINT_FILES="$LINT_FILES $f" ;;
-      *.py) LINT_FILES="$LINT_FILES $f" ;;
-      *.rb) LINT_FILES="$LINT_FILES $f" ;;
-      *.go) LINT_FILES="$LINT_FILES $f" ;;
-      *.rs) LINT_FILES="$LINT_FILES $f" ;;
+      *.ts|*.tsx|*.js|*.jsx|*.mjs|*.cjs) LINT_FILES+=("$f") ;;
+      *.py) LINT_FILES+=("$f") ;;
+      *.rb) LINT_FILES+=("$f") ;;
+      *.go) LINT_FILES+=("$f") ;;
+      *.rs) LINT_FILES+=("$f") ;;
     esac
   done
 
-  if [ -n "$LINT_FILES" ]; then
-    if ! $LINT_CMD $LINT_FILES 2>&1; then
+  if [ ${#LINT_FILES[@]} -gt 0 ]; then
+    if ! $LINT_CMD "${LINT_FILES[@]}" 2>&1; then
       echo "[zstack] Lint failed on staged files."
       ERRORS=$((ERRORS + 1))
     fi
@@ -51,18 +54,25 @@ fi
 # ── Type check ───────────────────────────────────────────────────────────────
 
 if [ -n "$TYPECHECK_CMD" ]; then
-  if ! $TYPECHECK_CMD 2>&1; then
+  # Capture output once, check both exit code and error count
+  TYPECHECK_OUTPUT=""
+  TYPECHECK_EXIT=0
+  TYPECHECK_OUTPUT=$($TYPECHECK_CMD 2>&1) || TYPECHECK_EXIT=$?
+
+  if [ "$TYPECHECK_EXIT" -ne 0 ]; then
     # Check if these are pre-existing errors (baseline-aware)
     if [ -f .zstack/baseline.json ]; then
       BASELINE_ERRORS=$(jq -r '.typecheck_errors // 0' .zstack/baseline.json)
-      CURRENT_ERRORS=$($TYPECHECK_CMD 2>&1 | grep -c "error\|Error" || echo 0)
+      CURRENT_ERRORS=$(echo "$TYPECHECK_OUTPUT" | grep -cE "error|Error" || echo 0)
       if [ "$CURRENT_ERRORS" -gt "$BASELINE_ERRORS" ]; then
+        echo "$TYPECHECK_OUTPUT"
         echo "[zstack] New type errors introduced ($CURRENT_ERRORS total, $BASELINE_ERRORS pre-existing)."
         ERRORS=$((ERRORS + 1))
       else
         echo "[zstack] Type errors exist but are pre-existing ($BASELINE_ERRORS). Passing."
       fi
     else
+      echo "$TYPECHECK_OUTPUT"
       echo "[zstack] Type check failed. Run 'zstack-baseline' to capture pre-existing errors."
       ERRORS=$((ERRORS + 1))
     fi
@@ -73,8 +83,8 @@ fi
 
 if [ -n "$TEST_CMD" ]; then
   # Find test files colocated with changed files
-  TEST_FILES=""
-  for f in $STAGED; do
+  TEST_FILES=()
+  for f in "${STAGED_FILES[@]}"; do
     dir=$(dirname "$f")
     base=$(basename "$f" | sed 's/\.[^.]*$//')
 
@@ -87,25 +97,37 @@ if [ -n "$TEST_CMD" ]; then
       "${dir}/__tests__/${base}.test.ts" "${dir}/__tests__/${base}.test.tsx" \
       "tests/${dir}/${base}_test.py" "tests/test_${base}.py" \
       "${dir}/${base}_test.go"; do
-      [ -f "$pattern" ] && TEST_FILES="$TEST_FILES $pattern"
+      [ -f "$pattern" ] && TEST_FILES+=("$pattern")
     done
 
     # Also include staged test files themselves
     case "$f" in
-      *.test.*|*.spec.*|*_test.*|test_*) TEST_FILES="$TEST_FILES $f" ;;
+      *.test.*|*.spec.*|*_test.*|test_*) TEST_FILES+=("$f") ;;
     esac
   done
 
   # Deduplicate
-  TEST_FILES=$(echo "$TEST_FILES" | tr ' ' '\n' | sort -u | tr '\n' ' ')
+  if [ ${#TEST_FILES[@]} -gt 0 ]; then
+    readarray -t TEST_FILES < <(printf '%s\n' "${TEST_FILES[@]}" | sort -u)
+  fi
 
-  if [ -n "$TEST_FILES" ]; then
+  if [ ${#TEST_FILES[@]} -gt 0 ]; then
     case "$TEST_RUNNER" in
-      vitest)   npx vitest run $TEST_FILES 2>&1 || ERRORS=$((ERRORS + 1)) ;;
-      jest)     npx jest $TEST_FILES 2>&1 || ERRORS=$((ERRORS + 1)) ;;
-      pytest)   pytest $TEST_FILES 2>&1 || ERRORS=$((ERRORS + 1)) ;;
-      go-test)  go test $TEST_FILES 2>&1 || ERRORS=$((ERRORS + 1)) ;;
-      *)        echo "[zstack] Unknown test runner: $TEST_RUNNER. Skipping colocated tests." ;;
+      vitest)     npx vitest run "${TEST_FILES[@]}" 2>&1 || ERRORS=$((ERRORS + 1)) ;;
+      jest)       npx jest "${TEST_FILES[@]}" 2>&1 || ERRORS=$((ERRORS + 1)) ;;
+      pytest)     pytest "${TEST_FILES[@]}" 2>&1 || ERRORS=$((ERRORS + 1)) ;;
+      go-test)
+        # go test takes package paths, not file paths. Derive packages from test file dirs.
+        GO_PKGS=()
+        for tf in "${TEST_FILES[@]}"; do
+          GO_PKGS+=("./$(dirname "$tf")/...")
+        done
+        readarray -t GO_PKGS < <(printf '%s\n' "${GO_PKGS[@]}" | sort -u)
+        go test "${GO_PKGS[@]}" 2>&1 || ERRORS=$((ERRORS + 1))
+        ;;
+      cargo-test) cargo test 2>&1 || ERRORS=$((ERRORS + 1)) ;;
+      rspec)      bundle exec rspec "${TEST_FILES[@]}" 2>&1 || ERRORS=$((ERRORS + 1)) ;;
+      *)          echo "[zstack] Unknown test runner: $TEST_RUNNER. Skipping colocated tests." ;;
     esac
   fi
 fi

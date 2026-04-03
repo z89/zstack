@@ -11,6 +11,11 @@ Run `/z:plan` when starting any feature, refactor, or bugfix that touches more t
 
 Runs on Standard and Full tiers.
 
+### Input
+
+- **Full tier:** `/z:design` produces a spec at `docs/plans/YYYY-MM-DD-<topic>-spec.md` and passes the path to `/z:plan`. Read the spec and extract requirements, architecture decisions, and constraints before starting Phase 1.
+- **Standard tier:** No spec exists. Gather requirements from the user's prompt and codebase context directly.
+
 ---
 
 ## Phase 1: Architecture Review

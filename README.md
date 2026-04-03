@@ -64,7 +64,7 @@ Diff-based review across 8 categories: SQL safety, trust boundary violations, co
 
 ### `/z:secure` &mdash; Security audit `user-invoked`
 
-14-phase analysis from attack surface census through OWASP Top 10 mapping and STRIDE threat modeling. Phases include secrets archaeology (scanning git history for credential patterns), dependency supply chain audit, CI/CD security review, and code-level analysis for injection, auth, and data exposure. Confidence gating adjusts sensitivity: daily mode surfaces only high-confidence findings, comprehensive mode catches anything plausible. Accepts flags for focused scans (`--deps`, `--secrets`, `--owasp`, `--diff`).
+Multi-phase analysis from attack surface census through OWASP Top 10 mapping and STRIDE threat modeling. Phases include secrets archaeology (scanning git history for credential patterns), dependency supply chain audit, CI/CD security review, and code-level analysis for injection, auth, and data exposure. Confidence gating adjusts sensitivity: daily mode surfaces only high-confidence findings, comprehensive mode catches anything plausible. Accepts flags for focused scans (`--deps`, `--secrets`, `--owasp`, `--diff`).
 
 ---
 

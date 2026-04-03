@@ -15,7 +15,7 @@ Handles the full shipping pipeline: PR creation, CI monitoring, merge, and post-
 
 ## Step 0: Pre-Ship Checks
 
-1. Read `.zstack/project.json` for `testRunner`, `testCommand`, `type`.
+1. Read `.zstack/project.json` for `test_runner`, `test_cmd`, `app_type`.
 
 2. Check for skipped steps (from `/z:build` skip flags):
    - If `/z:review` was skipped: `WARNING: Code review was skipped.`
@@ -23,9 +23,12 @@ Handles the full shipping pipeline: PR creation, CI monitoring, merge, and post-
    - If `/z:secure` was skipped: `WARNING: Security audit was skipped.`
    - Ask: "Ship anyway, or run the skipped checks first?"
 
-3. Run full test suite (not just colocated tests — this is the one time everything runs).
+3. If `/z:qa` was run, check its ship readiness verdict. If `NOT_READY`, warn and ask:
+   "QA verdict is NOT_READY. Ship anyway, or fix issues first?"
 
-4. If tests fail: apply bounded retry (2 attempts, then escalate).
+4. Run full test suite (not just colocated tests — this is the one time everything runs).
+
+5. If tests fail: apply bounded retry (2 attempts, then escalate).
 
 ## Step 1: Base Branch Detection
 

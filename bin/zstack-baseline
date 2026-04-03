@@ -3,6 +3,7 @@ set -euo pipefail
 
 # Capture baseline lint/test state for a project.
 # Used by hooks to distinguish pre-existing failures from new ones.
+# Counts are based on exit codes and grep of tool output.
 
 if [ ! -f .zstack/project.json ]; then
   echo '{"error": "No .zstack/project.json found. Run zstack-setup first."}'
@@ -17,29 +18,42 @@ LINT_ERRORS=0
 TYPECHECK_ERRORS=0
 TEST_FAILURES=0
 
-# Count lint errors
+# Count lint errors — use exit code to detect failure, grep -E for consistent counting
 if [ -n "$LINT_CMD" ]; then
-  LINT_ERRORS=$($LINT_CMD 2>&1 | grep -c "error\|Error" || echo 0)
+  LINT_OUTPUT=""
+  LINT_OUTPUT=$($LINT_CMD 2>&1) || true
+  LINT_ERRORS=$(echo "$LINT_OUTPUT" | grep -cE "error|Error" || echo 0)
 fi
 
 # Count typecheck errors
 if [ -n "$TYPECHECK_CMD" ]; then
-  TYPECHECK_ERRORS=$($TYPECHECK_CMD 2>&1 | grep -c "error\|Error" || echo 0)
+  TC_OUTPUT=""
+  TC_OUTPUT=$($TYPECHECK_CMD 2>&1) || true
+  TYPECHECK_ERRORS=$(echo "$TC_OUTPUT" | grep -cE "error|Error" || echo 0)
 fi
 
 # Count test failures
 if [ -n "$TEST_CMD" ]; then
-  TEST_FAILURES=$($TEST_CMD 2>&1 | grep -cE "fail|FAIL|FAILED" || echo 0)
+  TEST_OUTPUT=""
+  TEST_OUTPUT=$($TEST_CMD 2>&1) || true
+  TEST_FAILURES=$(echo "$TEST_OUTPUT" | grep -cE "fail|FAIL|FAILED" || echo 0)
 fi
 
-cat > .zstack/baseline.json << BASE
-{
-  "lint_errors": $LINT_ERRORS,
-  "typecheck_errors": $TYPECHECK_ERRORS,
-  "test_failures": $TEST_FAILURES,
-  "captured_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "branch": "$(git branch --show-current 2>/dev/null || echo unknown)"
-}
-BASE
+BRANCH=$(git branch --show-current 2>/dev/null || echo unknown)
+TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+jq -n \
+  --argjson lint "$LINT_ERRORS" \
+  --argjson typecheck "$TYPECHECK_ERRORS" \
+  --argjson tests "$TEST_FAILURES" \
+  --arg captured_at "$TIMESTAMP" \
+  --arg branch "$BRANCH" \
+  '{
+    lint_errors: $lint,
+    typecheck_errors: $typecheck,
+    test_failures: $tests,
+    captured_at: $captured_at,
+    branch: $branch
+  }' > .zstack/baseline.json
 
 echo "Baseline captured: $LINT_ERRORS lint errors, $TYPECHECK_ERRORS type errors, $TEST_FAILURES test failures"

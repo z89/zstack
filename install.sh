@@ -72,8 +72,10 @@ install_skills() {
 
     if [ -L "$link_path" ]; then
       local existing
-      existing=$(readlink "$link_path")
-      if [ "$existing" = "$skill_dir" ]; then
+      existing=$(readlink -f "$link_path" 2>/dev/null || echo "")
+      local target
+      target=$(readlink -f "${skill_dir%/}" 2>/dev/null || echo "")
+      if [ -n "$existing" ] && [ "$existing" = "$target" ]; then
         skipped=$((skipped + 1))
         continue
       fi
@@ -152,14 +154,14 @@ install_hooks() {
       if command -v python3 &>/dev/null; then
         python3 -c "
 import json, sys
-with open('$settings_file') as f: existing = json.load(f)
-with open('$SETTINGS_SRC') as f: zstack = json.load(f)
+with open(sys.argv[1]) as f: existing = json.load(f)
+with open(sys.argv[2]) as f: zstack = json.load(f)
 hooks = existing.get('hooks', {})
 for key, entries in zstack.get('hooks', {}).items():
     hooks[key] = hooks.get(key, []) + entries
 existing['hooks'] = hooks
-with open('$settings_file', 'w') as f: json.dump(existing, f, indent=2)
-" 2>/dev/null
+with open(sys.argv[1], 'w') as f: json.dump(existing, f, indent=2)
+" "$settings_file" "$SETTINGS_SRC"
         if [ $? -eq 0 ]; then
           info "Hooks merged into existing settings.json"
         else
