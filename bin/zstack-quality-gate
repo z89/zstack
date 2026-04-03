@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Pre-commit quality gate: runs typecheck + colocated tests on staged files.
+# This is a deterministic gate. The agent cannot skip it.
+# Blocks commit if new failures are introduced (baseline-aware).
+
+if [ ! -f .zstack/project.json ]; then
+  # No project config = passthrough mode (warn but don't block)
+  echo "[zstack] No .zstack/project.json found. Run 'zstack-setup' to enable quality gates."
+  exit 0
+fi
+
+LINT_CMD=$(jq -r '.lint_cmd // empty' .zstack/project.json)
+TYPECHECK_CMD=$(jq -r '.typecheck_cmd // empty' .zstack/project.json)
+TEST_CMD=$(jq -r '.test_cmd // empty' .zstack/project.json)
+TEST_RUNNER=$(jq -r '.test_runner // empty' .zstack/project.json)
+
+# Get staged files
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null || true)
+
+if [ -z "$STAGED" ]; then
+  exit 0
+fi
+
+ERRORS=0
+
+# ── Lint staged files ────────────────────────────────────────────────────────
+
+if [ -n "$LINT_CMD" ]; then
+  # Filter to files the linter can handle
+  LINT_FILES=""
+  for f in $STAGED; do
+    case "$f" in
+      *.ts|*.tsx|*.js|*.jsx|*.mjs|*.cjs) LINT_FILES="$LINT_FILES $f" ;;
+      *.py) LINT_FILES="$LINT_FILES $f" ;;
+      *.rb) LINT_FILES="$LINT_FILES $f" ;;
+      *.go) LINT_FILES="$LINT_FILES $f" ;;
+      *.rs) LINT_FILES="$LINT_FILES $f" ;;
+    esac
+  done
+
+  if [ -n "$LINT_FILES" ]; then
+    if ! $LINT_CMD $LINT_FILES 2>&1; then
+      echo "[zstack] Lint failed on staged files."
+      ERRORS=$((ERRORS + 1))
+    fi
+  fi
+fi
+
+# ── Type check ───────────────────────────────────────────────────────────────
+
+if [ -n "$TYPECHECK_CMD" ]; then
+  if ! $TYPECHECK_CMD 2>&1; then
+    # Check if these are pre-existing errors (baseline-aware)
+    if [ -f .zstack/baseline.json ]; then
+      BASELINE_ERRORS=$(jq -r '.typecheck_errors // 0' .zstack/baseline.json)
+      CURRENT_ERRORS=$($TYPECHECK_CMD 2>&1 | grep -c "error\|Error" || echo 0)
+      if [ "$CURRENT_ERRORS" -gt "$BASELINE_ERRORS" ]; then
+        echo "[zstack] New type errors introduced ($CURRENT_ERRORS total, $BASELINE_ERRORS pre-existing)."
+        ERRORS=$((ERRORS + 1))
+      else
+        echo "[zstack] Type errors exist but are pre-existing ($BASELINE_ERRORS). Passing."
+      fi
+    else
+      echo "[zstack] Type check failed. Run 'zstack-baseline' to capture pre-existing errors."
+      ERRORS=$((ERRORS + 1))
+    fi
+  fi
+fi
+
+# ── Colocated tests ─────────────────────────────────────────────────────────
+
+if [ -n "$TEST_CMD" ]; then
+  # Find test files colocated with changed files
+  TEST_FILES=""
+  for f in $STAGED; do
+    dir=$(dirname "$f")
+    base=$(basename "$f" | sed 's/\.[^.]*$//')
+
+    # Common test file patterns
+    for pattern in \
+      "${dir}/${base}.test.ts" "${dir}/${base}.test.tsx" \
+      "${dir}/${base}.test.js" "${dir}/${base}.test.jsx" \
+      "${dir}/${base}.spec.ts" "${dir}/${base}.spec.tsx" \
+      "${dir}/${base}.spec.js" "${dir}/${base}.spec.jsx" \
+      "${dir}/__tests__/${base}.test.ts" "${dir}/__tests__/${base}.test.tsx" \
+      "tests/${dir}/${base}_test.py" "tests/test_${base}.py" \
+      "${dir}/${base}_test.go"; do
+      [ -f "$pattern" ] && TEST_FILES="$TEST_FILES $pattern"
+    done
+
+    # Also include staged test files themselves
+    case "$f" in
+      *.test.*|*.spec.*|*_test.*|test_*) TEST_FILES="$TEST_FILES $f" ;;
+    esac
+  done
+
+  # Deduplicate
+  TEST_FILES=$(echo "$TEST_FILES" | tr ' ' '\n' | sort -u | tr '\n' ' ')
+
+  if [ -n "$TEST_FILES" ]; then
+    case "$TEST_RUNNER" in
+      vitest)   npx vitest run $TEST_FILES 2>&1 || ERRORS=$((ERRORS + 1)) ;;
+      jest)     npx jest $TEST_FILES 2>&1 || ERRORS=$((ERRORS + 1)) ;;
+      pytest)   pytest $TEST_FILES 2>&1 || ERRORS=$((ERRORS + 1)) ;;
+      go-test)  go test $TEST_FILES 2>&1 || ERRORS=$((ERRORS + 1)) ;;
+      *)        echo "[zstack] Unknown test runner: $TEST_RUNNER. Skipping colocated tests." ;;
+    esac
+  fi
+fi
+
+if [ "$ERRORS" -gt 0 ]; then
+  echo ""
+  echo "[zstack] Quality gate FAILED. $ERRORS check(s) did not pass."
+  echo "[zstack] Fix the issues above before committing."
+  exit 1
+fi
+
+exit 0

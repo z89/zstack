@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "if": "Bash(git commit *)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'ZSTACK_DIR=$(dirname $(dirname $(readlink -f ~/.claude/skills/z:build))) && $ZSTACK_DIR/bin/zstack-quality-gate'"
+          }
+        ]
+      }
+    ]
+  }
+}

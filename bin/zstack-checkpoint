@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Write or read checkpoint state for session recovery.
+# Usage:
+#   zstack-checkpoint write --plan FILE --task N --total T [--worktrees DIR1,DIR2]
+#   zstack-checkpoint read
+#   zstack-checkpoint verify
+#   zstack-checkpoint clear
+
+ACTION="${1:-read}"
+shift || true
+
+CHECKPOINT=".zstack/checkpoint.json"
+
+case "$ACTION" in
+  write)
+    PLAN="" TASK=0 TOTAL=0 WORKTREES="" COMPLETED=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --plan) PLAN="$2"; shift 2 ;;
+        --task) TASK="$2"; shift 2 ;;
+        --total) TOTAL="$2"; shift 2 ;;
+        --worktrees) WORKTREES="$2"; shift 2 ;;
+        --completed) COMPLETED="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+
+    PLAN_HASH=""
+    [ -n "$PLAN" ] && [ -f "$PLAN" ] && PLAN_HASH=$(sha256sum "$PLAN" | cut -d' ' -f1)
+
+    mkdir -p .zstack
+    cat > "$CHECKPOINT" << CP
+{
+  "plan": "$PLAN",
+  "plan_hash": "$PLAN_HASH",
+  "branch": "$(git branch --show-current 2>/dev/null || echo unknown)",
+  "head": "$(git rev-parse HEAD 2>/dev/null || echo unknown)",
+  "current_task": $TASK,
+  "total_tasks": $TOTAL,
+  "completed_tasks": [${COMPLETED}],
+  "worktrees": [${WORKTREES}],
+  "last_updated": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+CP
+    echo "Checkpoint saved: task $TASK/$TOTAL"
+    ;;
+
+  read)
+    if [ -f "$CHECKPOINT" ]; then
+      cat "$CHECKPOINT"
+    else
+      echo '{"exists": false}'
+    fi
+    ;;
+
+  verify)
+    if [ ! -f "$CHECKPOINT" ]; then
+      echo "NO_CHECKPOINT"
+      exit 0
+    fi
+
+    BRANCH=$(jq -r '.branch' "$CHECKPOINT")
+    HEAD=$(jq -r '.head' "$CHECKPOINT")
+    PLAN=$(jq -r '.plan' "$CHECKPOINT")
+    PLAN_HASH=$(jq -r '.plan_hash' "$CHECKPOINT")
+    STALE=""
+
+    # Check branch exists and matches
+    CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo unknown)
+    if [ "$CURRENT_BRANCH" != "$BRANCH" ]; then
+      STALE="branch_mismatch (expected=$BRANCH, current=$CURRENT_BRANCH)"
+    fi
+
+    # Check plan file unchanged
+    if [ -n "$PLAN" ] && [ -f "$PLAN" ]; then
+      CURRENT_HASH=$(sha256sum "$PLAN" | cut -d' ' -f1)
+      if [ "$CURRENT_HASH" != "$PLAN_HASH" ]; then
+        STALE="${STALE:+$STALE, }plan_modified"
+      fi
+    elif [ -n "$PLAN" ]; then
+      STALE="${STALE:+$STALE, }plan_missing"
+    fi
+
+    # Check worktrees exist
+    WORKTREES=$(jq -r '.worktrees[]?' "$CHECKPOINT" 2>/dev/null)
+    for wt in $WORKTREES; do
+      wt_clean=$(echo "$wt" | tr -d '"')
+      if [ -n "$wt_clean" ] && [ ! -d "$wt_clean" ]; then
+        STALE="${STALE:+$STALE, }worktree_missing($wt_clean)"
+      fi
+    done
+
+    if [ -n "$STALE" ]; then
+      echo "STALE: $STALE"
+    else
+      echo "VALID"
+    fi
+    ;;
+
+  clear)
+    rm -f "$CHECKPOINT"
+    echo "Checkpoint cleared."
+    ;;
+
+  *)
+    echo "Usage: zstack-checkpoint {write|read|verify|clear}"
+    exit 1
+    ;;
+esac

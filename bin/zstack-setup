@@ -1,0 +1,279 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Detect project tooling and write .zstack/project.json
+# Run this from a project's root directory.
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+info()  { echo -e "${GREEN}[zstack]${NC} $1"; }
+warn()  { echo -e "${YELLOW}[zstack]${NC} $1"; }
+
+if [ ! -d .git ]; then
+  echo -e "${RED}[zstack]${NC} Not a git repository. Run from a project root."
+  exit 1
+fi
+
+mkdir -p .zstack
+
+# ── Detect runtime ───────────────────────────────────────────────────────────
+
+RUNTIME="unknown"
+FRAMEWORK="unknown"
+
+[ -f package.json ] && RUNTIME="node"
+[ -f Gemfile ] && RUNTIME="ruby"
+[ -f requirements.txt ] || [ -f pyproject.toml ] && RUNTIME="python"
+[ -f go.mod ] && RUNTIME="go"
+[ -f Cargo.toml ] && RUNTIME="rust"
+[ -f composer.json ] && RUNTIME="php"
+[ -f mix.exs ] && RUNTIME="elixir"
+
+# ── Detect framework ────────────────────────────────────────────────────────
+
+if [ "$RUNTIME" = "node" ] && [ -f package.json ]; then
+  grep -q '"next"' package.json 2>/dev/null && FRAMEWORK="nextjs"
+  grep -q '"nuxt"' package.json 2>/dev/null && FRAMEWORK="nuxt"
+  grep -q '"svelte"' package.json 2>/dev/null && FRAMEWORK="sveltekit"
+  grep -q '"express"' package.json 2>/dev/null && FRAMEWORK="express"
+  grep -q '"fastify"' package.json 2>/dev/null && FRAMEWORK="fastify"
+  grep -q '"hono"' package.json 2>/dev/null && FRAMEWORK="hono"
+  grep -q '"electron"' package.json 2>/dev/null && FRAMEWORK="electron"
+  grep -q '"tauri"' package.json 2>/dev/null && FRAMEWORK="tauri"
+fi
+[ "$RUNTIME" = "ruby" ] && grep -q "rails" Gemfile 2>/dev/null && FRAMEWORK="rails"
+[ "$RUNTIME" = "python" ] && {
+  grep -q "django" requirements.txt pyproject.toml 2>/dev/null && FRAMEWORK="django"
+  grep -q "fastapi" requirements.txt pyproject.toml 2>/dev/null && FRAMEWORK="fastapi"
+  grep -q "flask" requirements.txt pyproject.toml 2>/dev/null && FRAMEWORK="flask"
+}
+[ "$RUNTIME" = "go" ] && grep -q "gin-gonic" go.mod 2>/dev/null && FRAMEWORK="gin"
+
+# ── Detect app type ──────────────────────────────────────────────────────────
+
+APP_TYPE="unknown"
+
+# Web app indicators
+if [[ "$FRAMEWORK" =~ ^(nextjs|nuxt|sveltekit)$ ]]; then
+  APP_TYPE="web-app"
+elif [ -d src/pages ] || [ -d src/app ] || [ -d src/routes ] || [ -d src/views ]; then
+  APP_TYPE="web-app"
+elif [ -f index.html ] || [ -d public ]; then
+  APP_TYPE="web-app"
+fi
+
+# API indicators
+if [[ "$FRAMEWORK" =~ ^(express|fastify|hono|gin|fastapi|flask|rails)$ ]] && [ "$APP_TYPE" = "unknown" ]; then
+  APP_TYPE="api"
+fi
+
+# CLI indicators
+if [ -f package.json ] && grep -q '"bin"' package.json 2>/dev/null; then
+  APP_TYPE="cli"
+elif [ -d cmd ] && [ "$RUNTIME" = "go" ]; then
+  APP_TYPE="cli"
+fi
+
+# Library indicators
+if [ -f package.json ] && grep -q '"main"\|"exports"\|"module"' package.json 2>/dev/null && [ "$APP_TYPE" = "unknown" ]; then
+  APP_TYPE="library"
+elif [ -f Cargo.toml ] && grep -q '^\[lib\]' Cargo.toml 2>/dev/null; then
+  APP_TYPE="library"
+fi
+
+# Desktop app indicators
+if [[ "$FRAMEWORK" =~ ^(electron|tauri)$ ]]; then
+  APP_TYPE="desktop-app"
+fi
+
+# Infrastructure indicators
+if ls *.tf 2>/dev/null | head -1 >/dev/null 2>&1; then
+  APP_TYPE="infrastructure"
+elif [ -f pulumi.yaml ] || [ -f Pulumi.yaml ]; then
+  APP_TYPE="infrastructure"
+fi
+
+# ── Detect linter ────────────────────────────────────────────────────────────
+
+LINTER="none"
+LINT_CMD=""
+
+if [ -f eslint.config.js ] || [ -f eslint.config.mjs ] || [ -f eslint.config.ts ] || [ -f .eslintrc.json ] || [ -f .eslintrc.js ] || [ -f .eslintrc.yml ]; then
+  LINTER="eslint"
+  LINT_CMD="npx eslint"
+elif [ -f biome.json ] || [ -f biome.jsonc ]; then
+  LINTER="biome"
+  LINT_CMD="npx biome check"
+elif [ -f deno.json ] || [ -f deno.jsonc ]; then
+  LINTER="deno"
+  LINT_CMD="deno lint"
+elif [ -f ruff.toml ] || ([ -f pyproject.toml ] && grep -q "ruff" pyproject.toml 2>/dev/null); then
+  LINTER="ruff"
+  LINT_CMD="ruff check"
+elif [ -f .rubocop.yml ]; then
+  LINTER="rubocop"
+  LINT_CMD="bundle exec rubocop"
+elif [ -f .golangci.yml ] || [ -f .golangci.yaml ]; then
+  LINTER="golangci-lint"
+  LINT_CMD="golangci-lint run"
+elif [ "$RUNTIME" = "rust" ]; then
+  LINTER="clippy"
+  LINT_CMD="cargo clippy"
+fi
+
+# ── Detect type checker ─────────────────────────────────────────────────────
+
+TYPECHECK="none"
+TYPECHECK_CMD=""
+
+if [ -f tsconfig.json ]; then
+  TYPECHECK="tsc"
+  TYPECHECK_CMD="npx tsc --noEmit"
+elif [ -f pyrightconfig.json ] || ([ -f pyproject.toml ] && grep -q "pyright" pyproject.toml 2>/dev/null); then
+  TYPECHECK="pyright"
+  TYPECHECK_CMD="pyright"
+elif ([ -f pyproject.toml ] && grep -q "mypy" pyproject.toml 2>/dev/null); then
+  TYPECHECK="mypy"
+  TYPECHECK_CMD="mypy ."
+elif [ "$RUNTIME" = "go" ]; then
+  TYPECHECK="go-vet"
+  TYPECHECK_CMD="go vet ./..."
+elif [ "$RUNTIME" = "rust" ]; then
+  TYPECHECK="cargo-check"
+  TYPECHECK_CMD="cargo check"
+fi
+
+# ── Detect test runner ───────────────────────────────────────────────────────
+
+TEST_RUNNER="none"
+TEST_CMD=""
+
+if [ -f vitest.config.ts ] || [ -f vitest.config.js ] || [ -f vitest.config.mts ]; then
+  TEST_RUNNER="vitest"
+  TEST_CMD="npx vitest run"
+elif [ -f jest.config.ts ] || [ -f jest.config.js ] || [ -f jest.config.mjs ]; then
+  TEST_RUNNER="jest"
+  TEST_CMD="npx jest"
+elif [ -f package.json ] && grep -q '"vitest"' package.json 2>/dev/null; then
+  TEST_RUNNER="vitest"
+  TEST_CMD="npx vitest run"
+elif [ -f package.json ] && grep -q '"jest"' package.json 2>/dev/null; then
+  TEST_RUNNER="jest"
+  TEST_CMD="npx jest"
+elif [ -f pytest.ini ] || [ -f pyproject.toml ] && grep -q "pytest" pyproject.toml 2>/dev/null; then
+  TEST_RUNNER="pytest"
+  TEST_CMD="pytest"
+elif [ -f .rspec ]; then
+  TEST_RUNNER="rspec"
+  TEST_CMD="bundle exec rspec"
+elif [ "$RUNTIME" = "go" ]; then
+  TEST_RUNNER="go-test"
+  TEST_CMD="go test ./..."
+elif [ "$RUNTIME" = "rust" ]; then
+  TEST_RUNNER="cargo-test"
+  TEST_CMD="cargo test"
+fi
+
+# ── Detect package manager ───────────────────────────────────────────────────
+
+PKG_MANAGER="none"
+
+if [ -f pnpm-lock.yaml ]; then
+  PKG_MANAGER="pnpm"
+elif [ -f bun.lockb ] || [ -f bun.lock ]; then
+  PKG_MANAGER="bun"
+elif [ -f yarn.lock ]; then
+  PKG_MANAGER="yarn"
+elif [ -f package-lock.json ]; then
+  PKG_MANAGER="npm"
+elif [ -f Gemfile.lock ]; then
+  PKG_MANAGER="bundler"
+elif [ -f poetry.lock ]; then
+  PKG_MANAGER="poetry"
+elif [ -f uv.lock ]; then
+  PKG_MANAGER="uv"
+elif [ -f go.sum ]; then
+  PKG_MANAGER="go-mod"
+elif [ -f Cargo.lock ]; then
+  PKG_MANAGER="cargo"
+fi
+
+# ── Detect formatter ────────────────────────────────────────────────────────
+
+FORMATTER="none"
+FORMAT_CMD=""
+
+if [ -f .prettierrc ] || [ -f .prettierrc.json ] || [ -f .prettierrc.js ] || [ -f prettier.config.js ]; then
+  FORMATTER="prettier"
+  FORMAT_CMD="npx prettier --write"
+elif [ "$LINTER" = "biome" ]; then
+  FORMATTER="biome"
+  FORMAT_CMD="npx biome format --write"
+elif [ "$RUNTIME" = "go" ]; then
+  FORMATTER="gofmt"
+  FORMAT_CMD="gofmt -w"
+elif [ "$RUNTIME" = "rust" ]; then
+  FORMATTER="rustfmt"
+  FORMAT_CMD="cargo fmt"
+elif [ "$LINTER" = "ruff" ]; then
+  FORMATTER="ruff"
+  FORMAT_CMD="ruff format"
+fi
+
+# ── Write project.json ──────────────────────────────────────────────────────
+
+cat > .zstack/project.json << PROJ
+{
+  "runtime": "$RUNTIME",
+  "framework": "$FRAMEWORK",
+  "app_type": "$APP_TYPE",
+  "package_manager": "$PKG_MANAGER",
+  "linter": "$LINTER",
+  "lint_cmd": "$LINT_CMD",
+  "typecheck": "$TYPECHECK",
+  "typecheck_cmd": "$TYPECHECK_CMD",
+  "test_runner": "$TEST_RUNNER",
+  "test_cmd": "$TEST_CMD",
+  "formatter": "$FORMATTER",
+  "format_cmd": "$FORMAT_CMD",
+  "detected_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+PROJ
+
+info "Project detected:"
+echo "  Runtime:     $RUNTIME"
+echo "  Framework:   $FRAMEWORK"
+echo "  App type:    $APP_TYPE"
+echo "  Pkg manager: $PKG_MANAGER"
+echo "  Linter:      $LINTER"
+echo "  Type check:  $TYPECHECK"
+echo "  Test runner: $TEST_RUNNER"
+echo "  Formatter:   $FORMATTER"
+echo ""
+info "Config written to .zstack/project.json"
+
+# Package manager warning
+if [[ "$PKG_MANAGER" =~ ^(npm|yarn)$ ]]; then
+  warn ""
+  warn "You're using $PKG_MANAGER. zstack creates git worktrees for isolation,"
+  warn "and each worktree runs a full dependency install."
+  warn "With $PKG_MANAGER, that means ~800MB+ of node_modules per worktree."
+  warn "With 5 parallel agents on Full tier, that's 4GB+ of duplicated deps."
+  warn ""
+  warn "Consider switching to pnpm (content-addressable store, near-free worktrees):"
+  warn "  https://pnpm.io/installation"
+fi
+
+# Add .zstack to .gitignore if not already there
+if [ -f .gitignore ]; then
+  if ! grep -q "^\.zstack" .gitignore 2>/dev/null; then
+    echo ".zstack/" >> .gitignore
+    info "Added .zstack/ to .gitignore"
+  fi
+else
+  echo ".zstack/" > .gitignore
+  info "Created .gitignore with .zstack/"
+fi
